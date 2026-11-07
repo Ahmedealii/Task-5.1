@@ -11,5 +11,10 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "dependencies": {
+    "all": "^0.0.0",
+    "body-parser": "^2.2.0",
+    "express-mongo-sanitize": "^2.2.0"
   }
 }

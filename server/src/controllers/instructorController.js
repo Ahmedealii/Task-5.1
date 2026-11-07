@@ -1,3 +1,4 @@
+import Joi from 'joi';
 import { Instructor } from '../models/Instructor.js';
 
 // =============================================================================
@@ -13,6 +14,18 @@ import { Instructor } from '../models/Instructor.js';
 //
 // This is the bug students must find and fix. Do not "clean this up".
 // =============================================================================
+
+const loginSchema = Joi.object({
+  username: Joi.string().trim().required(),
+  password: Joi.string().required(),
+  email: Joi.string().email().trim().optional()
+}).unknown(false);
+
+const searchSchema = Joi.object({
+  name: Joi.string().trim().optional(),
+  department: Joi.string().trim().optional(),
+  role: Joi.string().trim().optional()
+}).unknown(false);
 
 function publicProfile(doc) {
   // A successful login is a "trophy": we deliberately return the sensitive
@@ -31,11 +44,13 @@ function publicProfile(doc) {
 
 // POST /api/instructors/login
 export async function loginInstructor(req, res, next) {
+  const { error, value } = loginSchema.validate(req.body);
+  if (error) {
+    return res.status(400).json({ message: error.details[0].message });
+  }
+
   try {
-    const { username, password } = req.body;
-    if (username === undefined || password === undefined) {
-      return res.status(400).json({ message: 'username and password are required' });
-    }
+    const { username, password } = value;
 
     // ⚠️ VULNERABLE (NoSQL injection): `username` and `password` are placed
     // directly into the query. Honest clients send strings, but a crafted body
@@ -43,7 +58,10 @@ export async function loginInstructor(req, res, next) {
     // filter that matches any account (authentication bypass). With
     // {"password":{"$regex":"^S"}} the success/failure response becomes an
     // oracle for extracting the stored password one character at a time.
-    const instructor = await Instructor.findOne({ username, password });
+    const instructor = await Instructor.findOne({
+      username: { $eq: String(username) },
+      password: { $eq: String(password) }
+    });
 
     if (!instructor) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -72,6 +90,11 @@ export async function getDirectory(req, res, next) {
 // GET /api/instructors/search
 export async function searchInstructors(req, res, next) {
   try {
+    const { error, value } = searchSchema.validate(req.query);
+    if (error) {
+      return res.status(400).json({ message: error.details[0].message });
+    }
+
     // ⚠️ VULNERABLE (NoSQL injection): the entire query string is used as the
     // MongoDB filter and full documents (incl. password / apiKey / private
     // contact info) are returned. Examples of what this allows:
@@ -79,8 +102,21 @@ export async function searchInstructors(req, res, next) {
     //   ?role[$ne]=instructor           -> operator injection, leaks superadmin
     //   ?username[$regex]=^admin        -> regex enumeration
     //   ?$where=this.password.length>10 -> server-side JavaScript execution
-    const filter = req.query;
-    const instructors = await Instructor.find(filter).lean();
+    const filter = {};
+    if (value.name) {
+      filter.name = { $eq: String(value.name) };
+    }
+    if (value.department) {
+      filter.department = { $eq: String(value.department) };
+    }
+    if (value.role) {
+      filter.role = { $eq: String(value.role) };
+    }
+
+    const instructors = await Instructor.find(filter)
+      .select('name department role')
+      .lean();
+
     res.json({ count: instructors.length, instructors });
   } catch (err) {
     next(err);
