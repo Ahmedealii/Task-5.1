@@ -2,5 +2,6 @@
     "files.readonlyInclude": {
         "CLAUDE.md": true,
         "AGENTS.md": true
-    }
+    },
+    "cmake.sourceDirectory": "Z:/Task-5.1/node_modules/bare-url"
 }
