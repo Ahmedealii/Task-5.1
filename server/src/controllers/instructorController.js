@@ -1,4 +1,5 @@
 import Joi from 'joi';
+import bcrypt from 'bcryptjs';
 import { Instructor } from '../models/Instructor.js';
 
 // =============================================================================
@@ -19,13 +20,7 @@ const loginSchema = Joi.object({
   username: Joi.string().trim().required(),
   password: Joi.string().required(),
   email: Joi.string().email().trim().optional()
-}).unknown(false);
-
-const searchSchema = Joi.object({
-  name: Joi.string().trim().optional(),
-  department: Joi.string().trim().optional(),
-  role: Joi.string().trim().optional()
-}).unknown(false);
+});
 
 function publicProfile(doc) {
   // A successful login is a "trophy": we deliberately return the sensitive
@@ -58,14 +53,24 @@ export async function loginInstructor(req, res, next) {
     // filter that matches any account (authentication bypass). With
     // {"password":{"$regex":"^S"}} the success/failure response becomes an
     // oracle for extracting the stored password one character at a time.
+    if (typeof username !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+
     const instructor = await Instructor.findOne({
-      username: { $eq: String(username) },
-      password: { $eq: String(password) }
+      username: { $eq: String(username) }
     });
 
     if (!instructor) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+
+    const isMatch = await bcrypt.compare(String(password), instructor.password);
+
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
     return res.json({ instructor: publicProfile(instructor) });
   } catch (err) {
     next(err);
@@ -78,7 +83,7 @@ export async function loginInstructor(req, res, next) {
 export async function getDirectory(req, res, next) {
   try {
     const instructors = await Instructor.find()
-      .select('name department role')
+      .select('name username department role')
       .sort({ name: 1 })
       .lean();
     res.json({ instructors });
@@ -90,11 +95,6 @@ export async function getDirectory(req, res, next) {
 // GET /api/instructors/search
 export async function searchInstructors(req, res, next) {
   try {
-    const { error, value } = searchSchema.validate(req.query);
-    if (error) {
-      return res.status(400).json({ message: error.details[0].message });
-    }
-
     // ⚠️ VULNERABLE (NoSQL injection): the entire query string is used as the
     // MongoDB filter and full documents (incl. password / apiKey / private
     // contact info) are returned. Examples of what this allows:
@@ -102,22 +102,29 @@ export async function searchInstructors(req, res, next) {
     //   ?role[$ne]=instructor           -> operator injection, leaks superadmin
     //   ?username[$regex]=^admin        -> regex enumeration
     //   ?$where=this.password.length>10 -> server-side JavaScript execution
+
     const filter = {};
-    if (value.name) {
-      filter.name = { $eq: String(value.name) };
-    }
-    if (value.department) {
-      filter.department = { $eq: String(value.department) };
-    }
-    if (value.role) {
-      filter.role = { $eq: String(value.role) };
+    const allowedKeys = ['name', 'username', 'department', 'role'];
+
+    for (const key of allowedKeys) {
+      if (req.query && req.query[key] !== undefined) {
+        if (typeof req.query[key] === 'string') {
+          filter[key] = { $eq: req.query[key] };
+        } else if (typeof req.query[key] === 'object' && req.query[key] !== null) {
+          const values = Object.values(req.query[key]).filter((v) => typeof v === 'string');
+          if (values.length > 0) {
+            filter[key] = { $eq: values[0] };
+          }
+        }
+      }
     }
 
+    // Always return safe public fields only with 200 OK
     const instructors = await Instructor.find(filter)
-      .select('name department role')
+      .select('name username department role')
       .lean();
 
-    res.json({ count: instructors.length, instructors });
+    return res.status(200).json({ count: instructors.length, instructors });
   } catch (err) {
     next(err);
   }
